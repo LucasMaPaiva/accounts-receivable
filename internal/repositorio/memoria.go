@@ -14,10 +14,22 @@ import (
 type Memoria struct {
 	mu      sync.RWMutex
 	titulos map[string]titulo.Titulo
+	eventos map[string]bool
 }
 
 func NovaMemoria() *Memoria {
-	return &Memoria{titulos: make(map[string]titulo.Titulo)}
+	return &Memoria{titulos: make(map[string]titulo.Titulo), eventos: make(map[string]bool)}
+}
+
+func (m *Memoria) CriarDeEvento(_ context.Context, eventoID string, t *titulo.Titulo) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.eventos[eventoID] {
+		return false, nil
+	}
+	m.eventos[eventoID] = true
+	m.titulos[t.ID] = *t
+	return true, nil
 }
 
 func (m *Memoria) Salvar(_ context.Context, t *titulo.Titulo) error {

@@ -12,10 +12,28 @@ pagamento parcial ou total, saldo e vencimento. A comunicação com o monólito 
 - Binário estático: a imagem Docker fica pequena e sobe em milissegundos.
 - Tipagem estática e erros como valor de retorno: as regras de dinheiro ficam explícitas.
 
+## Arquitetura
+
+```
+ monólito Laravel                                   accounts-receivable (Go)
+ ────────────────                                   ────────────────────────
+ venda faturada ──► [vendas] venda.faturada ──► contas.venda_faturada ──► worker ──► PostgreSQL
+                                                  │ (inválida)                       │  titulos, pagamentos
+                                                  └──► contas.venda_faturada.erro    │  eventos_processados
+                                                                                     │  outbox
+ HTTP (pagamento) ─────────────────────────────────────────────────────────► api ───┘
+                                                                                     │
+ monolito.titulo_pago ◄── [contas] titulo.pago ◄── relay da outbox (worker) ◄────────┘
+```
+
 ## Estrutura
 
 ```
-cmd/api/              ponto de entrada (servidor HTTP com desligamento gracioso)
+cmd/api/              servidor HTTP com desligamento gracioso
+cmd/worker/           consome venda.faturada e publica a outbox
+cmd/simular-venda/    publica um venda.faturada como o monólito (desenvolvimento)
+internal/eventos/     mensagens e processamento, sem depender do RabbitMQ
+internal/mensageria/  topologia, consumidor e relay da outbox (amqp091-go)
 migrations/           SQL versionado (golang-migrate), aplicado por um container antes da API subir
 internal/titulo/      domínio: regras do título, sem HTTP nem banco
 internal/repositorio/ onde os títulos ficam: Postgres (pgx) e memória, com os mesmos testes de contrato
@@ -34,6 +52,7 @@ make test-integracao   # mesmos testes de contrato contra um Postgres real (banc
 make up     # Postgres, migrations e API em http://localhost:8080 (imagem distroless)
 make down   # para tudo (make reset apaga também o banco)
 make psql   # console do banco (Postgres em 127.0.0.1:5444)
+make venda  # publica um venda.faturada de teste (painel do RabbitMQ: http://localhost:15672, contas/contas)
 make migration nome=criar_algo   # nova migration
 make migrate-down / make migrate-up
 ```
@@ -57,6 +76,15 @@ curl "localhost:8080/titulos?cliente_id=c1&status=parcial&vencidos=true"
 - **`context.Context` em todo acesso ao banco.** Se o cliente cancela a requisição, a consulta é cancelada junto.
 - **Mesmo contrato, duas implementações.** `testarContrato` roda igual na memória e no Postgres; o handler depende só
   da interface.
+- **Idempotência no consumo (inbox).** A fila entrega "pelo menos uma vez". O `evento_id` é gravado em
+  `eventos_processados` na mesma transação que cria o título; a mesma mensagem duas vezes cria um título só.
+- **Erro permanente x temporário.** Mensagem inválida vai direto para a fila de erro (`Nack` sem requeue). Erro
+  temporário (banco fora) volta para a fila; depois de 10 entregas (`x-delivery-limit` da fila quorum) também vai para
+  a fila de erro, para não travar o consumo.
+- **Outbox no `titulo.pago`.** Publicar no RabbitMQ dentro do handler cria o problema da escrita dupla: o banco grava e
+  a fila falha (ou o contrário). O evento é gravado na tabela `outbox` na mesma transação do pagamento e um relay publica
+  com *publisher confirms*, marcando como publicado só depois da confirmação. Testado com o RabbitMQ parado: o pagamento
+  é aceito, o evento espera na outbox e sai quando a fila volta. `FOR UPDATE SKIP LOCKED` permite vários workers.
 - **Erro interno não vaza.** O detalhe vai para o log (JSON, `slog`) e o cliente recebe só "erro interno".
 
 ## Roteiro
@@ -69,7 +97,7 @@ curl "localhost:8080/titulos?cliente_id=c1&status=parcial&vencidos=true"
   - [x] repositório com pgx (pool) implementando a mesma interface do repositório em memória
   - [x] pagamento numa transação com `SELECT ... FOR UPDATE`, histórico em `pagamentos` e teste de concorrência
   - [x] listagem com filtros (cliente, status, vencidos) usando os índices
-- [ ] Fase 3: fila (RabbitMQ). O Laravel publica `venda.faturada`; um worker em Go consome, cria o título e publica
+- [x] Fase 3: fila (RabbitMQ). O Laravel publica `venda.faturada`; um worker em Go consome, cria o título e publica
       `titulo.pago`. Idempotência pelo id da mensagem e reprocessamento com fila de erro
 - [ ] Fase 4: lado Laravel de exemplo (job que publica o evento e listener que recebe o pagamento)
 - [ ] Fase 5: servidor MCP só leitura para consultar saldo, títulos vencidos e inadimplência por cliente

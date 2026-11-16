@@ -1,5 +1,6 @@
 # Credenciais abaixo são só para desenvolvimento local; sobrescreva pelo .env.
 x-database-url: &database-url "postgres://${POSTGRES_USER:-contas}:${POSTGRES_PASSWORD:-contas}@db:5432/${POSTGRES_DB:-contas}?sslmode=disable"
+x-rabbitmq-url: &rabbitmq-url "amqp://${RABBITMQ_USER:-contas}:${RABBITMQ_PASSWORD:-contas}@rabbitmq:5672/"
 
 services:
   db:
@@ -18,7 +19,23 @@ services:
       timeout: 3s
       retries: 15
 
-  # Roda as migrations e termina; a API só sobe se elas passarem.
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-contas}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-contas}
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORTA:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_PAINEL_PORTA:-15672}:15672" # painel: http://localhost:15672
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Roda as migrations e termina; API e worker só sobem se elas passarem.
   migrate:
     image: migrate/migrate:v4.18.1
     volumes:
@@ -40,5 +57,28 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  worker:
+    build: .
+    entrypoint: ["/worker"]
+    environment:
+      DATABASE_URL: *database-url
+      RABBITMQ_URL: *rabbitmq-url
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Ferramenta de desenvolvimento: publica um venda.faturada como o monólito.
+  # Uso: docker compose run --rm simular-venda -cliente c1 -valor 15000
+  simular-venda:
+    build: .
+    entrypoint: ["/simular-venda"]
+    environment:
+      RABBITMQ_URL: *rabbitmq-url
+    profiles: ["ferramentas"]
+
 volumes:
   dbdata:
+  rabbitdata:

@@ -17,6 +17,7 @@ type Repositorio interface {
 	Buscar(ctx context.Context, id string) (*titulo.Titulo, error)
 	Listar(ctx context.Context, f Filtro) ([]titulo.Titulo, error)
 	RegistrarPagamento(ctx context.Context, id string, valorCentavos int64) (*titulo.Titulo, error)
+	CriarDeEvento(ctx context.Context, eventoID string, t *titulo.Titulo) (bool, error)
 }
 
 func data(s string) time.Time {
@@ -95,6 +96,20 @@ func testarContrato(t *testing.T, repo Repositorio) {
 		got, _ := repo.Buscar(ctx, "a3")
 		if aceitos != 5 || recusados != 5 || got.Saldo() != 0 || got.Status != titulo.StatusPago {
 			t.Fatalf("aceitos %d, recusados %d, saldo %d, status %s", aceitos, recusados, got.Saldo(), got.Status)
+		}
+	})
+
+	t.Run("evento repetido não duplica título", func(t *testing.T) {
+		t1, _ := titulo.Novo("e-1", "c3", "Venda", 1000, data("2026-12-10"))
+		t2, _ := titulo.Novo("e-2", "c3", "Venda", 1000, data("2026-12-10"))
+		if criado, err := repo.CriarDeEvento(ctx, "evento-x", t1); err != nil || !criado {
+			t.Fatalf("primeira entrega: criado=%v err=%v", criado, err)
+		}
+		if criado, err := repo.CriarDeEvento(ctx, "evento-x", t2); err != nil || criado {
+			t.Fatalf("segunda entrega: criado=%v err=%v", criado, err)
+		}
+		if _, err := repo.Buscar(ctx, "e-2"); !errors.Is(err, ErrNaoEncontrado) {
+			t.Fatal("a segunda entrega não deveria criar título")
 		}
 	})
 

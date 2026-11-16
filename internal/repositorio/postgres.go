@@ -2,13 +2,16 @@ package repositorio
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/LucasMaPaiva/accounts-receivable/internal/eventos"
 	"github.com/LucasMaPaiva/accounts-receivable/internal/titulo"
 )
 
@@ -38,22 +41,52 @@ func scanTitulo(row pgx.Row) (*titulo.Titulo, error) {
 
 // Salvar cria ou atualiza (upsert). O status vai junto porque o banco confere
 // se ele é coerente com o valor pago.
+const sqlUpsert = `
+	INSERT INTO titulos (` + colunas + `)
+	VALUES ($1, $2, $3, $4, $5, $6, $7)
+	ON CONFLICT (id) DO UPDATE SET
+		descricao      = EXCLUDED.descricao,
+		valor_centavos = EXCLUDED.valor_centavos,
+		pago_centavos  = EXCLUDED.pago_centavos,
+		vencimento     = EXCLUDED.vencimento,
+		status         = EXCLUDED.status,
+		atualizado_em  = now()`
+
+func argsTitulo(t *titulo.Titulo) []any {
+	return []any{t.ID, t.ClienteID, t.Descricao, t.ValorCentavos, t.PagoCentavos, t.Vencimento, t.Status}
+}
+
 func (p *Postgres) Salvar(ctx context.Context, t *titulo.Titulo) error {
-	_, err := p.pool.Exec(ctx, `
-		INSERT INTO titulos (`+colunas+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (id) DO UPDATE SET
-			descricao      = EXCLUDED.descricao,
-			valor_centavos = EXCLUDED.valor_centavos,
-			pago_centavos  = EXCLUDED.pago_centavos,
-			vencimento     = EXCLUDED.vencimento,
-			status         = EXCLUDED.status,
-			atualizado_em  = now()`,
-		t.ID, t.ClienteID, t.Descricao, t.ValorCentavos, t.PagoCentavos, t.Vencimento, t.Status)
-	if err != nil {
+	if _, err := p.pool.Exec(ctx, sqlUpsert, argsTitulo(t)...); err != nil {
 		return fmt.Errorf("salvar título %s: %w", t.ID, err)
 	}
 	return nil
+}
+
+// CriarDeEvento registra o evento e cria o título na mesma transação.
+// Se o evento já existe (entrega repetida), não cria nada e devolve false.
+func (p *Postgres) CriarDeEvento(ctx context.Context, eventoID string, t *titulo.Titulo) (bool, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("iniciar transação: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO eventos_processados (evento_id) VALUES ($1) ON CONFLICT DO NOTHING`, eventoID)
+	if err != nil {
+		return false, fmt.Errorf("registrar evento %s: %w", eventoID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, sqlUpsert, argsTitulo(t)...); err != nil {
+		return false, fmt.Errorf("criar título do evento %s: %w", eventoID, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("confirmar evento %s: %w", eventoID, err)
+	}
+	return true, nil
 }
 
 func (p *Postgres) Buscar(ctx context.Context, id string) (*titulo.Titulo, error) {
@@ -133,6 +166,17 @@ func (p *Postgres) RegistrarPagamento(ctx context.Context, id string, valorCenta
 		`UPDATE titulos SET pago_centavos = $2, status = $3, atualizado_em = now() WHERE id = $1`,
 		id, t.PagoCentavos, t.Status); err != nil {
 		return nil, fmt.Errorf("atualizar título: %w", err)
+	}
+	// Outbox: o evento é gravado junto com o pagamento. Ou os dois ficam, ou
+	// nenhum fica; quem publica no RabbitMQ é o relay, depois do commit.
+	if t.Status == titulo.StatusPago {
+		payload, _ := json.Marshal(eventos.TituloPago{
+			TituloID: t.ID, ClienteID: t.ClienteID, ValorCentavos: t.ValorCentavos, PagoEm: time.Now().UTC(),
+		})
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO outbox (tipo, payload) VALUES ($1, $2)`, eventos.ChaveTituloPago, payload); err != nil {
+			return nil, fmt.Errorf("gravar outbox: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("confirmar pagamento: %w", err)

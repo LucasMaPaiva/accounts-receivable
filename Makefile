@@ -2,7 +2,7 @@
 GO = docker run --rm -v $(CURDIR):/app -w /app -v gomod:/go/pkg/mod golang:1.23 go
 MIGRATE = docker compose run --rm migrate -path /migrations -database "postgres://contas:contas@db:5432/contas?sslmode=disable"
 
-.PHONY: test test-integracao vet fmt tidy up down reset migrate-up migrate-down migration psql logs
+.PHONY: test test-integracao vet fmt tidy up down reset migrate-up migrate-down migration psql logs venda
 
 test:
 	$(GO) test ./... -race -cover
@@ -54,3 +54,7 @@ psql:
 
 logs:
 	docker compose logs -f api
+
+# Uso: make venda  ou  make venda args="-cliente c2 -valor 9900"
+venda:
+	docker compose run --rm simular-venda $(args)

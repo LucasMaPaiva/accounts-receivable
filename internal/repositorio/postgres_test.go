@@ -23,7 +23,7 @@ func TestPostgres(t *testing.T) {
 	}
 	defer pool.Close()
 
-	if _, err := pool.Exec(ctx, `TRUNCATE pagamentos, titulos`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE pagamentos, titulos, eventos_processados, outbox`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -37,5 +37,17 @@ func TestPostgres(t *testing.T) {
 	}
 	if n != 5 {
 		t.Fatalf("histórico de pagamentos do a3: %d linhas, esperado 5", n)
+	}
+
+	// Outbox: um único titulo.pago para cada título quitado (a3 e l3), mesmo
+	// com 10 tentativas simultâneas no a3; nada para o a2, que ficou parcial.
+	var quitados string
+	if err := pool.QueryRow(ctx, `
+		SELECT string_agg(payload->>'titulo_id', ',' ORDER BY payload->>'titulo_id')
+		FROM outbox WHERE tipo = 'titulo.pago'`).Scan(&quitados); err != nil {
+		t.Fatal(err)
+	}
+	if quitados != "a3,l3" {
+		t.Fatalf("outbox titulo.pago: %q, esperado \"a3,l3\"", quitados)
 	}
 }

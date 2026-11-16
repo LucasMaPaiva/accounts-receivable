@@ -2,7 +2,10 @@ module github.com/LucasMaPaiva/accounts-receivable
 
 go 1.23
 
-require github.com/jackc/pgx/v5 v5.7.2
+require (
+	github.com/jackc/pgx/v5 v5.7.2
+	github.com/rabbitmq/amqp091-go v1.10.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
