@@ -95,6 +95,17 @@ services:
       RABBITMQ_URL: *rabbitmq-url
     profiles: ["ferramentas"]
 
+  # Servidor MCP só leitura (stdio). Usado pelo .mcp.json da raiz.
+  mcp:
+    build: .
+    entrypoint: ["/mcp"]
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["ferramentas"]
+
   # Uso: make monolito-up (sobe os três abaixo junto com o serviço)
   monolito-migrate:
     <<: *monolito

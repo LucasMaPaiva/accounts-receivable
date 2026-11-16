@@ -1,5 +1,5 @@
 # Sem Go instalado, tudo roda no container oficial.
-GO = docker run --rm -v $(CURDIR):/app -w /app -v gomod:/go/pkg/mod golang:1.23 go
+GO = docker run --rm -v $(CURDIR):/app -w /app -v gomod:/go/pkg/mod golang:1.25 go
 MIGRATE = docker compose run --rm migrate -path /migrations -database "postgres://contas:contas@db:5432/contas?sslmode=disable"
 
 .PHONY: test test-integracao monolito-test monolito-up faturar vendas vet fmt tidy up down reset migrate-up migrate-down migration psql logs venda
@@ -16,8 +16,8 @@ test-integracao:
 	docker compose run --rm migrate -path /migrations -database "$(TEST_DB_URL)" up
 	docker run --rm --network accounts-receivable_default \
 		-e DATABASE_URL="$(TEST_DB_URL)" \
-		-v $(CURDIR):/app -w /app -v gomod:/go/pkg/mod golang:1.23 \
-		go test -tags integracao -race -count=1 ./...
+		-v $(CURDIR):/app -w /app -v gomod:/go/pkg/mod golang:1.25 \
+		go test -tags integracao -race -count=1 -p 1 ./...
 
 # Testes do monólito Laravel de exemplo (PHP também roda em container).
 MONOLITO = $(CURDIR)/exemplos/monolito-laravel

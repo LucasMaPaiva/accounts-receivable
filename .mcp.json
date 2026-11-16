@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "contas-a-receber": {
+      "command": "sh",
+      "args": ["-c", "docker compose build -q mcp >&2 && exec docker compose run --rm -T mcp"]
+    }
+  }
+}

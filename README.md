@@ -33,6 +33,7 @@ traz um monólito Laravel de exemplo em `exemplos/monolito-laravel` para mostrar
 ```
 cmd/api/              servidor HTTP com desligamento gracioso
 cmd/worker/           consome venda.faturada e publica a outbox
+cmd/mcp/              servidor MCP só leitura (stdio) para um assistente consultar os dados
 cmd/simular-venda/    publica um venda.faturada como o monólito (desenvolvimento)
 internal/eventos/     mensagens e processamento, sem depender do RabbitMQ
 internal/mensageria/  topologia, consumidor e relay da outbox (amqp091-go)
@@ -40,6 +41,8 @@ migrations/           SQL versionado (golang-migrate), aplicado por um container
 internal/titulo/      domínio: regras do título, sem HTTP nem banco
 internal/repositorio/ onde os títulos ficam: Postgres (pgx) e memória, com os mesmos testes de contrato
 internal/api/         handlers HTTP (net/http da biblioteca padrão)
+internal/consulta/    consultas só leitura (saldo, vencidos, inadimplência) em pool READ ONLY
+internal/mcpserver/   ferramentas MCP sobre as consultas (SDK oficial go-sdk)
 exemplos/monolito-laravel/   o outro lado: Laravel 13 que fatura vendas e recebe o titulo.pago
 ```
 
@@ -64,6 +67,17 @@ make faturar args="c1 15000"   # fatura uma venda no Laravel; o título aparece 
 make vendas        # vendas do monólito e se já foram pagas
 make monolito-test # testes PHPUnit do monólito
 ```
+
+### Perguntar para o Claude
+
+O `.mcp.json` da raiz registra o servidor MCP `contas-a-receber`. Abrindo o Claude Code nesta pasta (com o Postgres de
+pé), dá para perguntar "quem está mais inadimplente?" ou "qual o saldo do cliente c2?". Ferramentas:
+
+| Ferramenta | Responde |
+|---|---|
+| `saldo_cliente` | quanto o cliente deve, quanto já venceu e o próximo vencimento |
+| `titulos_vencidos` | títulos vencidos com dias de atraso (todos ou de um cliente) |
+| `inadimplencia` | clientes ordenados pelo valor vencido |
 
 ```sh
 curl -X POST localhost:8080/titulos \
@@ -102,6 +116,14 @@ curl "localhost:8080/titulos?cliente_id=c1&status=parcial&vencidos=true"
 - **Inbox também no Laravel.** O consumidor de `titulo.pago` grava o `message_id` (`outbox-<id>`, estável entre
   republicações do relay) em `mensagens_recebidas` na mesma transação da baixa. Testado republicando a mesma mensagem
   pelo painel: resultado `repetida`, venda intocada.
+- **MCP só leitura em duas camadas.** As ferramentas são marcadas `readOnlyHint` e só fazem `SELECT`, mas a garantia
+  real é do banco: o pool do MCP abre toda transação como `READ ONLY` (`default_transaction_read_only`). O teste de
+  integração tenta um `UPDATE` por esse pool e confere o erro `25006` do Postgres. Em produção somaria um usuário só
+  com `SELECT`.
+- **Limite em toda lista do MCP.** O que a ferramenta devolve entra no contexto do modelo: `titulos_vencidos` tem teto
+  de 500 e `inadimplencia` de 100, com padrão menor.
+- **"Hoje" no fuso de Brasília.** Em UTC o dia vira às 21h; o servidor calcula a data em `America/Sao_Paulo` (fuso
+  embutido no binário com `time/tzdata`) e o teste fixa 23h30 do dia 16 para conferir.
 - **Erro interno não vaza.** O detalhe vai para o log (JSON, `slog`) e o cliente recebe só "erro interno".
 
 ## Roteiro
@@ -118,5 +140,5 @@ curl "localhost:8080/titulos?cliente_id=c1&status=parcial&vencidos=true"
       `titulo.pago`. Idempotência pelo id da mensagem e reprocessamento com fila de erro
 - [x] Fase 4: lado Laravel de exemplo (job que publica o evento e consumidor que dá baixa na venda). O título guarda a
       `venda_id` de origem e o `titulo.pago` a devolve
-- [ ] Fase 5: servidor MCP só leitura para consultar saldo, títulos vencidos e inadimplência por cliente
+- [x] Fase 5: servidor MCP só leitura para consultar saldo, títulos vencidos e inadimplência por cliente
 - [ ] Fase 6: observabilidade (logs estruturados com slog, métricas Prometheus) e CI no GitHub Actions
