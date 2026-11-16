@@ -1,8 +1,44 @@
+# Credenciais abaixo são só para desenvolvimento local; sobrescreva pelo .env.
+x-database-url: &database-url "postgres://${POSTGRES_USER:-contas}:${POSTGRES_PASSWORD:-contas}@db:5432/${POSTGRES_DB:-contas}?sslmode=disable"
+
 services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-contas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-contas}
+      POSTGRES_DB: ${POSTGRES_DB:-contas}
+    ports:
+      - "127.0.0.1:${DB_PORTA:-5444}:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Roda as migrations e termina; a API só sobe se elas passarem.
+  migrate:
+    image: migrate/migrate:v4.18.1
+    volumes:
+      - ./migrations:/migrations:ro
+    command: ["-path", "/migrations", "-database", *database-url, "up"]
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build: .
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${API_PORTA:-8080}:8080"
     environment:
       PORTA: "8080"
+      DATABASE_URL: *database-url
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+
+volumes:
+  dbdata:
