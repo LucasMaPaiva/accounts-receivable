@@ -1,0 +1,127 @@
+// Package api expõe o domínio por HTTP usando só a biblioteca padrão
+// (net/http com rotas por método, disponível desde o Go 1.22).
+package api
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/LucasMaPaiva/accounts-receivable/internal/repositorio"
+	"github.com/LucasMaPaiva/accounts-receivable/internal/titulo"
+)
+
+// Repositorio é uma interface implícita: qualquer tipo que tenha estes
+// métodos serve, sem precisar declarar "implements".
+type Repositorio interface {
+	Salvar(t *titulo.Titulo) error
+	Buscar(id string) (*titulo.Titulo, error)
+}
+
+type Handler struct {
+	repo Repositorio
+}
+
+func NovoHandler(repo Repositorio) http.Handler {
+	h := &Handler{repo: repo}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /titulos", h.criar)
+	mux.HandleFunc("GET /titulos/{id}", h.buscar)
+	mux.HandleFunc("POST /titulos/{id}/pagamentos", h.pagar)
+	mux.HandleFunc("GET /saude", func(w http.ResponseWriter, _ *http.Request) {
+		responder(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	return mux
+}
+
+type criarRequest struct {
+	ClienteID     string `json:"cliente_id"`
+	Descricao     string `json:"descricao"`
+	ValorCentavos int64  `json:"valor_centavos"`
+	Vencimento    string `json:"vencimento"` // AAAA-MM-DD
+}
+
+func (h *Handler) criar(w http.ResponseWriter, r *http.Request) {
+	var req criarRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		erro(w, http.StatusBadRequest, "JSON inválido")
+		return
+	}
+	venc, err := time.Parse("2006-01-02", req.Vencimento)
+	if err != nil {
+		erro(w, http.StatusUnprocessableEntity, "vencimento deve estar no formato AAAA-MM-DD")
+		return
+	}
+	t, err := titulo.Novo(novoID(), req.ClienteID, req.Descricao, req.ValorCentavos, venc)
+	if err != nil {
+		erro(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if err := h.repo.Salvar(t); err != nil {
+		erro(w, http.StatusInternalServerError, "falha ao salvar")
+		return
+	}
+	responder(w, http.StatusCreated, t)
+}
+
+func (h *Handler) buscar(w http.ResponseWriter, r *http.Request) {
+	t, err := h.repo.Buscar(r.PathValue("id"))
+	if errors.Is(err, repositorio.ErrNaoEncontrado) {
+		erro(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		erro(w, http.StatusInternalServerError, "falha ao buscar")
+		return
+	}
+	responder(w, http.StatusOK, t)
+}
+
+type pagarRequest struct {
+	ValorCentavos int64 `json:"valor_centavos"`
+}
+
+func (h *Handler) pagar(w http.ResponseWriter, r *http.Request) {
+	t, err := h.repo.Buscar(r.PathValue("id"))
+	if errors.Is(err, repositorio.ErrNaoEncontrado) {
+		erro(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		erro(w, http.StatusInternalServerError, "falha ao buscar")
+		return
+	}
+	var req pagarRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		erro(w, http.StatusBadRequest, "JSON inválido")
+		return
+	}
+	if err := t.RegistrarPagamento(req.ValorCentavos); err != nil {
+		erro(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if err := h.repo.Salvar(t); err != nil {
+		erro(w, http.StatusInternalServerError, "falha ao salvar")
+		return
+	}
+	responder(w, http.StatusOK, t)
+}
+
+func responder(w http.ResponseWriter, status int, corpo any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(corpo)
+}
+
+func erro(w http.ResponseWriter, status int, msg string) {
+	responder(w, status, map[string]string{"erro": msg})
+}
+
+func novoID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
