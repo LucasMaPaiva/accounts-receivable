@@ -18,7 +18,7 @@ pagamento parcial ou total, saldo e vencimento. A comunicação com o monólito 
 cmd/api/              ponto de entrada (servidor HTTP com desligamento gracioso)
 migrations/           SQL versionado (golang-migrate), aplicado por um container antes da API subir
 internal/titulo/      domínio: regras do título, sem HTTP nem banco
-internal/repositorio/ onde os títulos ficam (hoje em memória)
+internal/repositorio/ onde os títulos ficam: Postgres (pgx) e memória, com os mesmos testes de contrato
 internal/api/         handlers HTTP (net/http da biblioteca padrão)
 ```
 
@@ -29,7 +29,8 @@ Dinheiro sempre em centavos (`int64`), nunca `float`.
 Sem Go instalado, pelo Docker:
 
 ```sh
-make test   # testes com detector de condição de corrida
+make test   # testes unitários com detector de condição de corrida
+make test-integracao   # mesmos testes de contrato contra um Postgres real (banco contas_teste)
 make up     # Postgres, migrations e API em http://localhost:8080 (imagem distroless)
 make down   # para tudo (make reset apaga também o banco)
 make psql   # console do banco (Postgres em 127.0.0.1:5444)
@@ -42,18 +43,32 @@ curl -X POST localhost:8080/titulos \
   -d '{"cliente_id":"c1","descricao":"Mensalidade","valor_centavos":10000,"vencimento":"2026-12-10"}'
 curl -X POST localhost:8080/titulos/<id>/pagamentos -d '{"valor_centavos":4000}'
 curl localhost:8080/titulos/<id>
+curl "localhost:8080/titulos?cliente_id=c1&status=parcial&vencidos=true"
 ```
+
+## Decisões
+
+- **Pagamento em transação com `SELECT ... FOR UPDATE`.** Sem a trava, dois pagamentos simultâneos leem o mesmo saldo
+  e um sobrescreve o outro (*lost update*). O teste `pagamentos simultâneos não estouram o saldo` dispara 10 pagamentos
+  de 20,00 num título de 100,00: com a trava, 5 são aceitos e 5 recusados. Removendo o `FOR UPDATE`, os 10 são aceitos e
+  o saldo fica errado (60,00 em vez de 0).
+- **Regra no domínio e também no banco.** O domínio decide; os `CHECK` do Postgres garantem que nem um bug nem um
+  `UPDATE` manual deixem pago acima do valor ou status incoerente.
+- **`context.Context` em todo acesso ao banco.** Se o cliente cancela a requisição, a consulta é cancelada junto.
+- **Mesmo contrato, duas implementações.** `testarContrato` roda igual na memória e no Postgres; o handler depende só
+  da interface.
+- **Erro interno não vaza.** O detalhe vai para o log (JSON, `slog`) e o cliente recebe só "erro interno".
 
 ## Roteiro
 
 - [x] Fase 1: domínio com testes e API HTTP com repositório em memória
-- [ ] Fase 2: PostgreSQL
+- [x] Fase 2: PostgreSQL
   - [x] docker-compose com Postgres 17, healthcheck e migrations antes da API
   - [x] tabelas `titulos` e `pagamentos` com as regras também no banco (`CHECK` de valor, pago não excede o valor,
         status coerente com o pago; chave estrangeira no pagamento) e índices para listagem e vencidos
-  - [ ] repositório com pgx implementando a mesma interface do repositório em memória
-  - [ ] pagamento numa transação com `SELECT ... FOR UPDATE` e teste de pagamentos simultâneos
-  - [ ] listagem com filtros (cliente, status, vencidos)
+  - [x] repositório com pgx (pool) implementando a mesma interface do repositório em memória
+  - [x] pagamento numa transação com `SELECT ... FOR UPDATE`, histórico em `pagamentos` e teste de concorrência
+  - [x] listagem com filtros (cliente, status, vencidos) usando os índices
 - [ ] Fase 3: fila (RabbitMQ). O Laravel publica `venda.faturada`; um worker em Go consome, cria o título e publica
       `titulo.pago`. Idempotência pelo id da mensagem e reprocessamento com fila de erro
 - [ ] Fase 4: lado Laravel de exemplo (job que publica o evento e listener que recebe o pagamento)

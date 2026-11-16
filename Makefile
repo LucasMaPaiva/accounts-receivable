@@ -2,10 +2,25 @@
 GO = docker run --rm -v $(CURDIR):/app -w /app -v gomod:/go/pkg/mod golang:1.23 go
 MIGRATE = docker compose run --rm migrate -path /migrations -database "postgres://contas:contas@db:5432/contas?sslmode=disable"
 
-.PHONY: test vet fmt up down reset migrate-up migrate-down migration psql logs
+.PHONY: test test-integracao vet fmt tidy up down reset migrate-up migrate-down migration psql logs
 
 test:
 	$(GO) test ./... -race -cover
+
+# Sobe o Postgres, cria o banco contas_teste (separado do de desenvolvimento),
+# aplica as migrations nele e roda os testes marcados com a tag integracao.
+TEST_DB_URL = postgres://contas:contas@db:5432/contas_teste?sslmode=disable
+test-integracao:
+	docker compose up -d --wait db
+	docker compose exec -T db sh -c 'createdb -U contas contas_teste 2>/dev/null || true'
+	docker compose run --rm migrate -path /migrations -database "$(TEST_DB_URL)" up
+	docker run --rm --network accounts-receivable_default \
+		-e DATABASE_URL="$(TEST_DB_URL)" \
+		-v $(CURDIR):/app -w /app -v gomod:/go/pkg/mod golang:1.23 \
+		go test -tags integracao -race -count=1 ./...
+
+tidy:
+	$(GO) mod tidy
 
 vet:
 	$(GO) vet ./...

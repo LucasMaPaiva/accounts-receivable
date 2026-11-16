@@ -54,6 +54,8 @@ func TestErros(t *testing.T) {
 		{"data inválida", "POST", "/titulos", `{"cliente_id":"c1","valor_centavos":1,"vencimento":"10/12/2026"}`, http.StatusUnprocessableEntity},
 		{"valor zero", "POST", "/titulos", `{"cliente_id":"c1","valor_centavos":0,"vencimento":"2026-12-10"}`, http.StatusUnprocessableEntity},
 		{"inexistente", "GET", "/titulos/nao-existe", "", http.StatusNotFound},
+		{"pagar inexistente", "POST", "/titulos/nao-existe/pagamentos", `{"valor_centavos":1}`, http.StatusNotFound},
+		{"status inválido", "GET", "/titulos?status=cancelado", "", http.StatusUnprocessableEntity},
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
