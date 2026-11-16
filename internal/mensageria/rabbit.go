@@ -12,6 +12,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/LucasMaPaiva/accounts-receivable/internal/eventos"
+	"github.com/LucasMaPaiva/accounts-receivable/internal/metricas"
 )
 
 // Conectar tenta por até 30 s: no docker-compose o RabbitMQ pode ainda
@@ -101,12 +102,19 @@ func tratar(ctx context.Context, msg amqp.Delivery, repo eventos.Criador, novoID
 	criado, err := eventos.ProcessarVendaFaturada(ctx, repo, msg.Body, novoID)
 	switch {
 	case err == nil:
+		resultado := "criado"
+		if !criado {
+			resultado = "repetido"
+		}
+		metricas.EventosConsumidos.WithLabelValues(resultado).Inc()
 		slog.Info("venda.faturada processada", "message_id", msg.MessageId, "titulo_criado", criado)
 		_ = msg.Ack(false)
 	case errors.Is(err, eventos.ErrMensagemInvalida):
+		metricas.EventosConsumidos.WithLabelValues("invalido").Inc()
 		slog.Warn("mensagem enviada para a fila de erro", "message_id", msg.MessageId, "erro", err)
 		_ = msg.Nack(false, false)
 	default:
+		metricas.EventosConsumidos.WithLabelValues("erro_temporario").Inc()
 		slog.Error("erro temporário, mensagem volta para a fila", "message_id", msg.MessageId, "erro", err)
 		select {
 		case <-ctx.Done():

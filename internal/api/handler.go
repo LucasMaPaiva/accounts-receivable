@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/LucasMaPaiva/accounts-receivable/internal/metricas"
 	"github.com/LucasMaPaiva/accounts-receivable/internal/repositorio"
 	"github.com/LucasMaPaiva/accounts-receivable/internal/titulo"
 )
@@ -41,7 +42,9 @@ func NovoHandler(repo Repositorio) http.Handler {
 	mux.HandleFunc("GET /saude", func(w http.ResponseWriter, _ *http.Request) {
 		responder(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	return mux
+	// Na mesma porta para simplificar; em produção ficaria numa porta interna.
+	mux.Handle("GET /metrics", metricas.Handler())
+	return metricas.HTTP(mux)
 }
 
 type criarRequest struct {
@@ -122,12 +125,14 @@ func (h *Handler) pagar(w http.ResponseWriter, r *http.Request) {
 	t, err := h.repo.RegistrarPagamento(r.Context(), r.PathValue("id"), req.ValorCentavos)
 	switch {
 	case err == nil:
+		metricas.Pagamentos.WithLabelValues("aceito").Inc()
 		responder(w, http.StatusOK, t)
 	case errors.Is(err, repositorio.ErrNaoEncontrado):
 		erro(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, titulo.ErrValorInvalido),
 		errors.Is(err, titulo.ErrJaPago),
 		errors.Is(err, titulo.ErrPagamentoExcede):
+		metricas.Pagamentos.WithLabelValues("recusado").Inc()
 		erro(w, http.StatusUnprocessableEntity, err.Error())
 	default:
 		falhaInterna(w, r, err)

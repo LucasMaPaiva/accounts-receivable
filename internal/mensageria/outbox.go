@@ -11,6 +11,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/LucasMaPaiva/accounts-receivable/internal/eventos"
+	"github.com/LucasMaPaiva/accounts-receivable/internal/metricas"
 )
 
 // RelayOutbox publica os eventos pendentes da outbox a cada intervalo.
@@ -105,5 +106,9 @@ func publicarLote(ctx context.Context, pool *pgxpool.Pool, ch *amqp.Channel) (in
 	if _, err := tx.Exec(ctx, `UPDATE outbox SET publicado_em = now() WHERE id = ANY($1)`, publicados); err != nil {
 		return 0, err
 	}
-	return len(publicados), tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	metricas.OutboxPublicados.Add(float64(len(publicados)))
+	return len(publicados), nil
 }

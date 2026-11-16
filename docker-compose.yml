@@ -141,6 +141,16 @@ services:
     <<: *monolito
     profiles: ["ferramentas"]
 
+  # Prometheus coletando API e worker. Uso: make observar (painel em http://localhost:9090)
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORTA:-9090}:9090"
+    depends_on: [api, worker]
+    profiles: ["observabilidade"]
+
 volumes:
   dbdata:
   rabbitdata:

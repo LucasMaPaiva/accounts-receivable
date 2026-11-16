@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (lint, testes e integração)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: contas
+          POSTGRES_PASSWORD: contas
+          POSTGRES_DB: contas_teste
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U contas -d contas_teste"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    env:
+      DATABASE_URL: postgres://contas:contas@localhost:5432/contas_teste?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Formatação
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: go vet
+        run: go vet ./...
+      - name: go.mod em dia
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+
+      - name: Testes unitários (com detector de corrida)
+        run: go test -race -cover ./...
+
+      - name: Migrations
+        run: |
+          docker run --rm --network host -v "$PWD/migrations:/migrations:ro" \
+            migrate/migrate:v4.18.1 -path /migrations -database "$DATABASE_URL" up
+      - name: Testes de integração (Postgres real)
+        run: go test -tags integracao -race -count=1 -p 1 ./...
+
+  laravel:
+    name: Monólito Laravel (PHPUnit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: exemplos/monolito-laravel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: sockets, pdo_sqlite
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist
+      - run: vendor/bin/phpunit --testdox
+
+  imagens:
+    name: Imagens Docker
+    runs-on: ubuntu-latest
+    needs: [go, laravel]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Serviço Go (api, worker, mcp)
+        run: docker build -t accounts-receivable .
+      - name: Tamanho da imagem
+        run: docker image ls accounts-receivable --format '{{.Size}}'
+      - name: Monólito Laravel
+        run: docker build -t monolito-laravel exemplos/monolito-laravel

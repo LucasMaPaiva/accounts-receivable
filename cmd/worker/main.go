@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/LucasMaPaiva/accounts-receivable/internal/mensageria"
+	"github.com/LucasMaPaiva/accounts-receivable/internal/metricas"
 	"github.com/LucasMaPaiva/accounts-receivable/internal/repositorio"
 )
 
@@ -38,6 +41,16 @@ func rodar() error {
 	if err := pool.Ping(ctx); err != nil {
 		return err
 	}
+
+	metricas.RegistrarOutboxPendentes(func() (int, error) {
+		consulta, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var n int
+		err := pool.QueryRow(consulta, `SELECT count(*) FROM outbox WHERE publicado_em IS NULL`).Scan(&n)
+		return n, err
+	})
+	srvMetricas := servidorMetricas()
+	defer srvMetricas.Close()
 
 	conn, err := mensageria.Conectar(ctx, os.Getenv("RABBITMQ_URL"))
 	if err != nil {
@@ -77,6 +90,23 @@ func rodar() error {
 	}
 	slog.Info("worker encerrado")
 	return err
+}
+
+// O worker não tem API; abre uma porta só para o Prometheus coletar.
+func servidorMetricas() *http.Server {
+	porta := os.Getenv("METRICAS_PORTA")
+	if porta == "" {
+		porta = "9091"
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metricas.Handler())
+	srv := &http.Server{Addr: ":" + porta, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("servidor de métricas", "erro", err)
+		}
+	}()
+	return srv
 }
 
 func novoID() string {

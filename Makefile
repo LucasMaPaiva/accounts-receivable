@@ -2,7 +2,7 @@
 GO = docker run --rm -v $(CURDIR):/app -w /app -v gomod:/go/pkg/mod golang:1.25 go
 MIGRATE = docker compose run --rm migrate -path /migrations -database "postgres://contas:contas@db:5432/contas?sslmode=disable"
 
-.PHONY: test test-integracao monolito-test monolito-up faturar vendas vet fmt tidy up down reset migrate-up migrate-down migration psql logs venda
+.PHONY: test test-integracao monolito-test monolito-up faturar vendas observar vet fmt tidy up down reset migrate-up migrate-down migration psql logs venda
 
 test:
 	$(GO) test ./... -race -cover
@@ -39,11 +39,11 @@ up:
 	docker compose up --build -d
 
 down:
-	docker compose --profile monolito --profile ferramentas down
+	docker compose --profile monolito --profile ferramentas --profile observabilidade down
 
 # Apaga também os volumes (bancos e filas).
 reset:
-	docker compose --profile monolito --profile ferramentas down -v
+	docker compose --profile monolito --profile ferramentas --profile observabilidade down -v
 
 migrate-up:
 	$(MIGRATE) up
@@ -67,6 +67,10 @@ venda:
 	docker compose run --rm simular-venda $(args)
 
 # Serviço Go + monólito Laravel (fila e consumidor).
+# Sobe também o Prometheus (http://localhost:9090).
+observar:
+	docker compose --profile observabilidade up --build -d
+
 monolito-up:
 	docker compose --profile monolito up --build -d
 

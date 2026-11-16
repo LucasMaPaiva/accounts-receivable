@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/LucasMaPaiva/accounts-receivable/internal/metricas"
 	"github.com/LucasMaPaiva/accounts-receivable/internal/repositorio"
 	"github.com/LucasMaPaiva/accounts-receivable/internal/titulo"
 )
@@ -64,5 +67,29 @@ func TestErros(t *testing.T) {
 				t.Fatalf("status %d, esperado %d (%s)", rec.Code, c.status, rec.Body)
 			}
 		})
+	}
+}
+
+func TestMetricas(t *testing.T) {
+	h := NovoHandler(repositorio.NovaMemoria())
+	aceitos := testutil.ToFloat64(metricas.Pagamentos.WithLabelValues("aceito"))
+	recusados := testutil.ToFloat64(metricas.Pagamentos.WithLabelValues("recusado"))
+
+	rec := requisicao(t, h, "POST", "/titulos", `{"cliente_id":"c1","valor_centavos":1000,"vencimento":"2026-12-10"}`)
+	var criado titulo.Titulo
+	_ = json.Unmarshal(rec.Body.Bytes(), &criado)
+	requisicao(t, h, "POST", "/titulos/"+criado.ID+"/pagamentos", `{"valor_centavos":1000}`)
+	requisicao(t, h, "POST", "/titulos/"+criado.ID+"/pagamentos", `{"valor_centavos":1}`) // já pago
+
+	if d := testutil.ToFloat64(metricas.Pagamentos.WithLabelValues("aceito")) - aceitos; d != 1 {
+		t.Fatalf("pagamentos aceitos: +%v, esperado +1", d)
+	}
+	if d := testutil.ToFloat64(metricas.Pagamentos.WithLabelValues("recusado")) - recusados; d != 1 {
+		t.Fatalf("pagamentos recusados: +%v, esperado +1", d)
+	}
+
+	rec = requisicao(t, h, "GET", "/metrics", "")
+	if !strings.Contains(rec.Body.String(), `contas_http_requisicoes_total{metodo="POST",rota="/titulos/{id}/pagamentos",status="422"}`) {
+		t.Fatal("/metrics não trouxe a série da rota de pagamento")
 	}
 }
