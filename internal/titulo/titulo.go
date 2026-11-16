@@ -33,6 +33,9 @@ type Titulo struct {
 	PagoCentavos  int64     `json:"pago_centavos"`
 	Vencimento    time.Time `json:"vencimento"`
 	Status        Status    `json:"status"`
+	// VendaID liga o título à venda do monólito que o originou (vazio se o
+	// título foi criado direto pela API).
+	VendaID string `json:"venda_id,omitempty"`
 }
 
 func Novo(id, clienteID, descricao string, valorCentavos int64, vencimento time.Time) (*Titulo, error) {

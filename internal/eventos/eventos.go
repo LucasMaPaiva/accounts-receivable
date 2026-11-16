@@ -39,6 +39,7 @@ type VendaFaturada struct {
 // TituloPago sai deste serviço quando um título é quitado.
 type TituloPago struct {
 	TituloID      string    `json:"titulo_id"`
+	VendaID       string    `json:"venda_id,omitempty"`
 	ClienteID     string    `json:"cliente_id"`
 	ValorCentavos int64     `json:"valor_centavos"`
 	PagoEm        time.Time `json:"pago_em"`
@@ -75,5 +76,6 @@ func ProcessarVendaFaturada(ctx context.Context, repo Criador, corpo []byte, nov
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", ErrMensagemInvalida, err)
 	}
+	t.VendaID = ev.VendaID
 	return repo.CriarDeEvento(ctx, ev.EventoID, t)
 }

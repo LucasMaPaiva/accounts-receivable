@@ -22,7 +22,7 @@ func TestProcessarVendaFaturada(t *testing.T) {
 		t.Fatalf("primeira entrega: criado=%v err=%v", criado, err)
 	}
 	tit, _ := repo.Buscar(ctx, "t1")
-	if tit.ValorCentavos != 15000 || tit.Descricao != "Venda v1" {
+	if tit.ValorCentavos != 15000 || tit.Descricao != "Venda v1" || tit.VendaID != "v1" {
 		t.Fatalf("título criado errado: %+v", tit)
 	}
 

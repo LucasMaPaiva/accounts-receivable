@@ -102,6 +102,7 @@ func testarContrato(t *testing.T, repo Repositorio) {
 	t.Run("evento repetido não duplica título", func(t *testing.T) {
 		t1, _ := titulo.Novo("e-1", "c3", "Venda", 1000, data("2026-12-10"))
 		t2, _ := titulo.Novo("e-2", "c3", "Venda", 1000, data("2026-12-10"))
+		t1.VendaID, t2.VendaID = "v-1", "v-1"
 		if criado, err := repo.CriarDeEvento(ctx, "evento-x", t1); err != nil || !criado {
 			t.Fatalf("primeira entrega: criado=%v err=%v", criado, err)
 		}
@@ -110,6 +111,11 @@ func testarContrato(t *testing.T, repo Repositorio) {
 		}
 		if _, err := repo.Buscar(ctx, "e-2"); !errors.Is(err, ErrNaoEncontrado) {
 			t.Fatal("a segunda entrega não deveria criar título")
+		}
+		// A venda de origem sobrevive à gravação e ao pagamento.
+		pago, err := repo.RegistrarPagamento(ctx, "e-1", 1000)
+		if err != nil || pago.VendaID != "v-1" {
+			t.Fatalf("venda de origem perdida: %+v err=%v", pago, err)
 		}
 	})
 

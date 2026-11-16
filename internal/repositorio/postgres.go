@@ -25,16 +25,20 @@ func NovoPostgres(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool}
 }
 
-const colunas = "id, cliente_id, descricao, valor_centavos, pago_centavos, vencimento, status"
+const colunas = "id, cliente_id, descricao, valor_centavos, pago_centavos, vencimento, status, venda_id"
 
 func scanTitulo(row pgx.Row) (*titulo.Titulo, error) {
 	var t titulo.Titulo
-	err := row.Scan(&t.ID, &t.ClienteID, &t.Descricao, &t.ValorCentavos, &t.PagoCentavos, &t.Vencimento, &t.Status)
+	var vendaID *string // coluna pode ser NULL
+	err := row.Scan(&t.ID, &t.ClienteID, &t.Descricao, &t.ValorCentavos, &t.PagoCentavos, &t.Vencimento, &t.Status, &vendaID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNaoEncontrado
 	}
 	if err != nil {
 		return nil, err
+	}
+	if vendaID != nil {
+		t.VendaID = *vendaID
 	}
 	return &t, nil
 }
@@ -43,7 +47,7 @@ func scanTitulo(row pgx.Row) (*titulo.Titulo, error) {
 // se ele é coerente com o valor pago.
 const sqlUpsert = `
 	INSERT INTO titulos (` + colunas + `)
-	VALUES ($1, $2, $3, $4, $5, $6, $7)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	ON CONFLICT (id) DO UPDATE SET
 		descricao      = EXCLUDED.descricao,
 		valor_centavos = EXCLUDED.valor_centavos,
@@ -53,7 +57,11 @@ const sqlUpsert = `
 		atualizado_em  = now()`
 
 func argsTitulo(t *titulo.Titulo) []any {
-	return []any{t.ID, t.ClienteID, t.Descricao, t.ValorCentavos, t.PagoCentavos, t.Vencimento, t.Status}
+	var vendaID *string
+	if t.VendaID != "" {
+		vendaID = &t.VendaID
+	}
+	return []any{t.ID, t.ClienteID, t.Descricao, t.ValorCentavos, t.PagoCentavos, t.Vencimento, t.Status, vendaID}
 }
 
 func (p *Postgres) Salvar(ctx context.Context, t *titulo.Titulo) error {
@@ -171,7 +179,7 @@ func (p *Postgres) RegistrarPagamento(ctx context.Context, id string, valorCenta
 	// nenhum fica; quem publica no RabbitMQ é o relay, depois do commit.
 	if t.Status == titulo.StatusPago {
 		payload, _ := json.Marshal(eventos.TituloPago{
-			TituloID: t.ID, ClienteID: t.ClienteID, ValorCentavos: t.ValorCentavos, PagoEm: time.Now().UTC(),
+			TituloID: t.ID, VendaID: t.VendaID, ClienteID: t.ClienteID, ValorCentavos: t.ValorCentavos, PagoEm: time.Now().UTC(),
 		})
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO outbox (tipo, payload) VALUES ($1, $2)`, eventos.ChaveTituloPago, payload); err != nil {

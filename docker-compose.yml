@@ -2,6 +2,22 @@
 x-database-url: &database-url "postgres://${POSTGRES_USER:-contas}:${POSTGRES_PASSWORD:-contas}@db:5432/${POSTGRES_DB:-contas}?sslmode=disable"
 x-rabbitmq-url: &rabbitmq-url "amqp://${RABBITMQ_USER:-contas}:${RABBITMQ_PASSWORD:-contas}@rabbitmq:5672/"
 
+# Monólito Laravel de exemplo (fase 4). Banco próprio em SQLite, num volume.
+x-monolito: &monolito
+  build: ./exemplos/monolito-laravel
+  environment:
+    DB_CONNECTION: sqlite
+    DB_DATABASE: /app/database/dados/monolito.sqlite
+    DB_BUSY_TIMEOUT: "5000" # fila, consumidor e artisan usam o mesmo arquivo
+    DB_JOURNAL_MODE: wal
+    QUEUE_CONNECTION: database
+    CACHE_STORE: array
+    SESSION_DRIVER: array
+    LOG_CHANNEL: stderr
+    RABBITMQ_URL: *rabbitmq-url
+  volumes:
+    - monolitodados:/app/database/dados
+
 services:
   db:
     image: postgres:17-alpine
@@ -79,6 +95,42 @@ services:
       RABBITMQ_URL: *rabbitmq-url
     profiles: ["ferramentas"]
 
+  # Uso: make monolito-up (sobe os três abaixo junto com o serviço)
+  monolito-migrate:
+    <<: *monolito
+    command: ["sh", "-c", "touch database/dados/monolito.sqlite && php artisan migrate --force"]
+    profiles: ["monolito"]
+
+  # queue:work publica venda.faturada (job PublicarVendaFaturada).
+  monolito-fila:
+    <<: *monolito
+    command: ["php", "artisan", "queue:work", "--sleep=1"]
+    depends_on:
+      monolito-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["monolito"]
+
+  # Consome titulo.pago e dá baixa na venda. A fila é declarada pelo worker Go.
+  monolito-consumidor:
+    <<: *monolito
+    command: ["php", "artisan", "contas:consumir-titulos-pagos"]
+    depends_on:
+      monolito-migrate:
+        condition: service_completed_successfully
+      worker:
+        condition: service_started
+    restart: unless-stopped
+    profiles: ["monolito"]
+
+  # Linha de comando do monólito. Uso: make faturar args="c1 15000"
+  monolito:
+    <<: *monolito
+    profiles: ["ferramentas"]
+
 volumes:
   dbdata:
   rabbitdata:
+  monolitodados:

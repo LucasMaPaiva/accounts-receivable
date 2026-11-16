@@ -47,7 +47,14 @@ func TestPostgres(t *testing.T) {
 		FROM outbox WHERE tipo = 'titulo.pago'`).Scan(&quitados); err != nil {
 		t.Fatal(err)
 	}
-	if quitados != "a3,l3" {
-		t.Fatalf("outbox titulo.pago: %q, esperado \"a3,l3\"", quitados)
+	if quitados != "a3,e-1,l3" {
+		t.Fatalf("outbox titulo.pago: %q, esperado \"a3,e-1,l3\"", quitados)
+	}
+
+	// O evento leva a venda de origem para o monólito dar baixa.
+	var venda string
+	if err := pool.QueryRow(ctx, `
+		SELECT payload->>'venda_id' FROM outbox WHERE payload->>'titulo_id' = 'e-1'`).Scan(&venda); err != nil || venda != "v-1" {
+		t.Fatalf("venda_id no evento: %q err=%v", venda, err)
 	}
 }
